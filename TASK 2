@@ -1,0 +1,577 @@
+Here's your complete roadmap from zero to demo-ready, in exact order:
+
+---
+
+## 🗺️ Full Build Roadmap
+
+### ✅ Phase 0 — Done (prerequisites)
+- Python, Node.js installed
+- Project folders created
+- `main.py` echo server running
+- Groq + Hindsight API keys in `.env`
+
+---
+
+### 🔧 Phase 1 — Real LLM responses (Day 1, ~1 hour)
+
+**Goal:** Your `/api/chat` endpoint calls Groq and returns a real AI response.
+
+Replace the echo in `main.py` with a real Groq call. Create `backend/agent.py`:
+
+```python
+# backend/agent.py
+from groq import Groq
+import os
+
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+SYSTEM_PROMPT = """You are PitchMind, an elite AI sales deal intelligence assistant.
+You help sales reps prepare for calls, handle objections, and close deals.
+Be specific, tactical, and concise."""
+
+async def run_agent(user_id: str, deal_name: str, user_message: str):
+    try:
+        response = client.chat.completions.create(
+            model="qwen/qwen3-32b",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"Deal: {deal_name}\n\n{user_message}"}
+            ],
+            max_tokens=600
+        )
+        answer = response.choices[0].message.content
+    except Exception as e:
+        print(f"[LLM error] {e}")
+        answer = "Sorry, I had trouble generating a response. Please try again."
+
+    return answer, []  # empty memories for now
+```
+
+Update `main.py` to use it:
+
+```python
+# Add at top of main.py
+from agent import run_agent
+
+# Replace the chat function with:
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    answer, memories = await run_agent(req.user_id, req.deal_name, req.message)
+    return {"response": answer, "memories_used": memories}
+```
+
+**Test:** Go to `localhost:8000/docs`, call `/api/chat` with a real message like `"Brief me on the Acme deal"`. You should get a real AI response back.
+
+---
+
+### 🧠 Phase 2 — Connect Hindsight memory (Day 1–2, ~2 hours)
+
+**Goal:** Every conversation is saved to Hindsight and retrieved on future messages.
+
+Create `backend/memory.py`:
+
+```python
+# backend/memory.py
+import httpx
+import os
+
+BASE = os.getenv("HINDSIGHT_BASE_URL")
+KEY  = os.getenv("HINDSIGHT_API_KEY")
+HEADERS = {"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
+
+async def fetch_memories(user_id: str, deal_name: str, query: str) -> list:
+    """Ask Hindsight: what do we know about this deal?"""
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                f"{BASE}/api/memory/search",
+                headers=HEADERS,
+                json={
+                    "query": query,
+                    "user_id": user_id,
+                    "filters": {"deal": deal_name},
+                    "top_k": 5
+                },
+                timeout=10.0
+            )
+            resp.raise_for_status()
+            return resp.json().get("memories", [])
+        except Exception as e:
+            print(f"[Hindsight fetch error] {e}")
+            return []  # agent still works, just without memory
+
+async def save_memory(user_id: str, deal_name: str, content: str):
+    """Save this interaction to Hindsight for future recall."""
+    async with httpx.AsyncClient() as client:
+        try:
+            await client.post(
+                f"{BASE}/api/memory/store",
+                headers=HEADERS,
+                json={
+                    "user_id": user_id,
+                    "content": content,
+                    "metadata": {"deal": deal_name}
+                },
+                timeout=10.0
+            )
+        except Exception as e:
+            print(f"[Hindsight save error] {e}")
+```
+
+Then update `backend/agent.py` to use memory:
+
+```python
+# backend/agent.py (updated)
+from groq import Groq
+from memory import fetch_memories, save_memory
+import os
+
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+SYSTEM_PROMPT = """You are PitchMind, an elite AI sales deal intelligence assistant.
+You have access to the full memory of every past interaction about this deal.
+USE IT. Reference past objections, promises, and context by name.
+Never give generic advice when you have deal-specific memory available."""
+
+async def run_agent(user_id: str, deal_name: str, user_message: str):
+    # 1. Fetch relevant past memories
+    memories = await fetch_memories(user_id, deal_name, user_message)
+
+    # 2. Build memory context string to inject into the prompt
+    memory_context = ""
+    if memories:
+        memory_context = "\n\n[DEAL MEMORY — USE THIS CONTEXT]\n"
+        for m in memories:
+            memory_context += f"- {m.get('content', '')}\n"
+
+    # 3. Call Groq with memory injected
+    try:
+        response = client.chat.completions.create(
+            model="qwen/qwen3-32b",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT + memory_context},
+                {"role": "user", "content": f"Deal: {deal_name}\n\n{user_message}"}
+            ],
+            max_tokens=600
+        )
+        answer = response.choices[0].message.content
+    except Exception as e:
+        print(f"[LLM error] {e}")
+        answer = "Sorry, I had trouble generating a response. Please try again."
+
+    # 4. Save this exchange to Hindsight AFTER responding
+    await save_memory(
+        user_id, deal_name,
+        content=f"User: {user_message} | Agent: {answer[:300]}"
+    )
+
+    return answer, memories  # return memories so frontend can display them
+```
+
+**Test:** Send 3 messages about "Acme Corp". On the 4th, ask "what objections has Acme raised?" — the answer should reference your earlier messages.
+
+---
+
+### 🌱 Phase 3 — Pre-seed synthetic memory (Day 2, ~1 hour)
+
+**Goal:** Your demo starts smart, not blank. Run this script once before the demo.
+
+Create `backend/seed_memory.py`:
+
+```python
+# backend/seed_memory.py
+# Run once: python seed_memory.py
+import asyncio
+from memory import save_memory
+
+USER_ID = "marcus"
+DEAL = "Acme Corp"
+
+# 20 realistic past interactions to pre-load into Hindsight
+FAKE_HISTORY = [
+    "User asked for deal overview. Agent noted Acme is a 200-person logistics company evaluating for Q3.",
+    "Acme's main contact is Sarah Chen, VP of Operations. Budget approved up to $80k annually.",
+    "Acme raised pricing objection in week 1. They said $80k was at the top of their range.",
+    "Competitor mentioned: Acme is also evaluating Salesforce and HubSpot.",
+    "Agent suggested quarterly payment plan to address pricing concern. Sarah went quiet after.",
+    "Follow-up call: Sarah mentioned IT compliance is a major blocker. Need SOC2 docs.",
+    "SOC2 certification documents sent to Sarah on June 1st.",
+    "Sarah introduced Mike Torres, Head of IT, as new stakeholder in week 3.",
+    "Mike Torres asked about API integration with their existing NetSuite setup.",
+    "Agent confirmed NetSuite integration is supported via REST API. Mike seemed satisfied.",
+    "Pricing objection raised again in week 4 call. Sarah asked for a 10% discount.",
+    "Agent offered 8% discount if they sign before end of quarter. Sarah said she'd check with CFO.",
+    "CFO approval pending. Sarah said decision expected by June 15th.",
+    "User noted Acme hasn't responded in 5 days. Agent suggested a value-ROI follow-up email.",
+    "Sarah replied to email. Still waiting on CFO. Asked for customer references in logistics sector.",
+    "Three logistics customer references sent. Two agreed to reference calls.",
+    "Reference call with Maersk logistics completed. Positive feedback shared with Sarah.",
+    "Sarah confirmed CFO is reviewing. Main remaining concern: onboarding timeline.",
+    "Agent suggested 30-day onboarding guarantee to reduce risk perception.",
+    "Deal status: verbal interest, awaiting formal sign-off. Close probability 70%.",
+]
+
+async def seed():
+    print("Seeding Hindsight memory...")
+    for i, memory in enumerate(FAKE_HISTORY):
+        await save_memory(USER_ID, DEAL, memory)
+        print(f"  ✓ Saved memory {i+1}/{len(FAKE_HISTORY)}")
+    print("Done! Hindsight is pre-loaded for the demo.")
+
+asyncio.run(seed())
+```
+
+Run it once:
+```bash
+# Make sure (venv) is active and you're in backend/
+python seed_memory.py
+```
+
+After this, asking "brief me on Acme Corp" will instantly return a rich, specific answer — this is your demo's opening wow moment.
+
+---
+
+### 💻 Phase 4 — Build the frontend (Day 2–3, ~3 hours)
+
+**Goal:** A clean chat UI with the Memory Monitor Panel judges will see.
+
+```bash
+# From pitchmind/ root folder
+cd frontend
+npm run dev
+# Opens at localhost:3000
+```
+
+Replace `frontend/app/page.tsx` with:
+
+```tsx
+// frontend/app/page.tsx
+"use client";
+import { useState } from "react";
+
+type Message = { role: "user" | "agent"; text: string };
+type Memory  = { content: string; score?: number };
+
+export default function Home() {
+  const [messages, setMessages]   = useState<Message[]>([]);
+  const [memories, setMemories]   = useState<Memory[]>([]);
+  const [input, setInput]         = useState("");
+  const [dealName, setDealName]   = useState("Acme Corp");
+  const [loading, setLoading]     = useState(false);
+
+  async function sendMessage() {
+    if (!input.trim()) return;
+    const userMsg = input;
+    setInput("");
+    setMessages(prev => [...prev, { role: "user", text: userMsg }]);
+    setLoading(true);
+
+    try {
+      const res = await fetch("http://localhost:8000/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: "marcus",
+          deal_name: dealName,
+          message: userMsg
+        })
+      });
+      const data = await res.json();
+      setMessages(prev => [...prev, { role: "agent", text: data.response }]);
+      setMemories(data.memories_used || []);
+    } catch {
+      setMessages(prev => [...prev, { role: "agent", text: "Connection error. Is the backend running?" }]);
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div style={{ display: "flex", height: "100vh", fontFamily: "sans-serif", background: "#0f0f0f", color: "#e5e5e5" }}>
+
+      {/* ── CHAT PANEL ── */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "24px" }}>
+        <h1 style={{ color: "#fff", marginBottom: 8 }}>⚡ PitchMind</h1>
+
+        {/* Deal selector */}
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ color: "#888", fontSize: 13 }}>Active deal: </label>
+          <input value={dealName} onChange={e => setDealName(e.target.value)}
+            style={{ background: "#1a1a1a", border: "1px solid #333", color: "#fff",
+              borderRadius: 6, padding: "4px 10px", marginLeft: 8 }} />
+        </div>
+
+        {/* Messages */}
+        <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
+          {messages.map((m, i) => (
+            <div key={i} style={{
+              alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+              background: m.role === "user" ? "#1d4ed8" : "#1a1a1a",
+              border: "1px solid #2a2a2a",
+              borderRadius: 10, padding: "10px 14px", maxWidth: "70%", lineHeight: 1.6
+            }}>
+              {m.text}
+            </div>
+          ))}
+          {loading && <div style={{ color: "#666", fontStyle: "italic" }}>PitchMind is thinking...</div>}
+        </div>
+
+        {/* Input */}
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <input
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && sendMessage()}
+            placeholder="Ask about your deal..."
+            style={{ flex: 1, background: "#1a1a1a", border: "1px solid #333",
+              color: "#fff", borderRadius: 8, padding: "10px 14px", fontSize: 15 }}
+          />
+          <button onClick={sendMessage} disabled={loading}
+            style={{ background: "#1d4ed8", color: "#fff", border: "none",
+              borderRadius: 8, padding: "10px 20px", cursor: "pointer", fontSize: 15 }}>
+            Send
+          </button>
+        </div>
+      </div>
+
+      {/* ── MEMORY MONITOR PANEL ── */}
+      <div style={{ width: 300, background: "#111", borderLeft: "1px solid #222",
+        padding: 20, overflowY: "auto" }}>
+        <h3 style={{ color: "#10b981", fontFamily: "monospace", marginBottom: 16, fontSize: 13 }}>
+          ⚡ HINDSIGHT MEMORY
+        </h3>
+        {memories.length === 0 ? (
+          <p style={{ color: "#444", fontSize: 13, fontStyle: "italic" }}>
+            No past context retrieved yet.<br/><br/>
+            Send a message to see Hindsight fetch memories in real time.
+          </p>
+        ) : (
+          <>
+            <p style={{ color: "#6b7280", fontSize: 12, marginBottom: 12 }}>
+              {memories.length} memories retrieved
+            </p>
+            {memories.map((m, i) => (
+              <div key={i} style={{ background: "#1a1a1a", border: "1px solid #10b98133",
+                borderRadius: 8, padding: 10, marginBottom: 8 }}>
+                <p style={{ color: "#d1fae5", fontSize: 12, lineHeight: 1.5 }}>
+                  {m.content?.slice(0, 120)}...
+                </p>
+                {m.score && (
+                  <p style={{ color: "#10b981", fontSize: 11, marginTop: 6 }}>
+                    relevance: {(m.score * 100).toFixed(0)}%
+                  </p>
+                )}
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
+    </div>
+  );
+}
+```
+
+**Test:** Open `localhost:3000`, type "Brief me on Acme Corp" — you should see the agent respond AND the green memory cards appear on the right.
+
+---
+
+### 🎬 Phase 5 — Demo prep (Day 3, ~1 hour)
+
+**Your 60-second demo script:**
+
+> *"Meet Marcus, a sales rep managing 30 deals. Before PitchMind, he spent 45 minutes re-reading notes before every call."*
+
+1. Show an empty chat. Ask: **"Brief me on Acme Corp"**
+2. Point to the Memory Panel: *"Watch — Hindsight is pulling 5 memories from past interactions"*
+3. Read the specific response (Sarah Chen, pricing objection, SOC2, June 15th deadline)
+4. Ask: **"They pushed back on pricing again — what should I do?"**
+5. Agent references the history: *"You already tried quarterly payments — try ROI framing instead"*
+6. Say: *"This is interaction 20. Interaction 1 gave a generic answer. The agent learned."*
+
+**Make a backup recording** of this flow in case of demo-day internet issues.
+
+---
+
+### 📋 Final submission checklist
+
+- [ ] GitHub repo pushed with clean `README.md`
+- [ ] Demo video recorded (Loom is free)
+- [ ] Article written about what you built (required by content guide)
+- [ ] Social post drafted
+- [ ] Hindsight memory usage clearly explained in submission notes
+- [ ] Seed script run so demo starts with warm memory
+
+---
+
+**Your immediate next action:** Copy `agent.py` and `memory.py` into your `backend/` folder and restart your server with `uvicorn main:app --reload`. Reply with what you see and we'll debug anything that comes up.
+
+Here's every resource and tool you'll use, in the exact order you need them:
+
+---
+
+## 🛠️ Complete Resource & Tool Stack
+
+### Stage 1 — Accounts to create RIGHT NOW (before writing any code)
+
+| # | Tool | What it's for | Link | Cost |
+|---|---|---|---|---|
+| 1 | **Hindsight Cloud** | Your memory layer | [ui.hindsight.vectorize.io](https://ui.hindsight.vectorize.io) | Free — use code `MEMHACK6` for $50 credit |
+| 2 | **Groq** | Your LLM (ultra fast) | [console.groq.com](https://console.groq.com) | Free tier |
+| 3 | **GitHub** | Store your code | [github.com](https://github.com) | Free |
+| 4 | **Hindsight Slack** | Ask questions, get help from organizers | Link in Hindsight docs | Free |
+
+---
+
+### Stage 2 — AI Coding Agents (use these to WRITE your code for you)
+
+Since you're a beginner, don't write code from scratch. Use these AI agents to generate it:
+
+| Priority | Tool | Best used for | Link | Cost |
+|---|---|---|---|---|
+| ⭐ #1 | **Google Jules** | Autonomous coding agent — give it a task, it writes files directly in your GitHub repo | [jules.google.com](https://jules.google.com) | Free |
+| ⭐ #2 | **OpenCode** | VS Code-style coding agent, works with Groq/Ollama | [opencode.ai](https://opencode.ai) | Free |
+| #3 | **OpenAI Codex** | Code generation via chat | [openai.com/codex](https://openai.com/codex) | Free tier |
+| #4 | **Claude (this chat)** | Architecture, debugging, explaining errors | [claude.ai](https://claude.ai) | Free tier |
+
+**How to use Jules (recommended for beginners):**
+1. Connect Jules to your GitHub repo
+2. Type a task like: *"Create a FastAPI backend in `/backend/main.py` with a `/api/chat` endpoint that calls Groq and returns a JSON response"*
+3. Jules writes the files and opens a pull request
+4. You review and merge — no manual coding needed
+
+---
+
+### Stage 3 — Tools to install on your computer
+
+Install these once, in this order:
+
+```bash
+# 1. Python (if not installed)
+# Download from python.org/downloads → install → restart terminal
+
+# 2. Node.js (if not installed)  
+# Download from nodejs.org → install LTS version → restart terminal
+
+# 3. VS Code (code editor — where you'll view/edit files)
+# Download from code.visualstudio.com → install
+
+# 4. Git (to push code to GitHub)
+# Download from git-scm.com → install
+```
+
+**VS Code extensions to install** (open VS Code → Extensions tab → search each):
+- `Python` — by Microsoft
+- `Pylance` — Python autocomplete
+- `ES7 React` — React autocomplete
+- `Tailwind CSS IntelliSense` — Tailwind autocomplete
+
+---
+
+### Stage 4 — Documentation to bookmark (read in this order)
+
+| Order | Doc | Why you need it |
+|---|---|---|
+| 1st | [hindsight.vectorize.io](https://hindsight.vectorize.io) | Learn exactly what API calls to make for save/fetch memory |
+| 2nd | [console.groq.com/docs](https://console.groq.com/docs) | Understand how to call the LLM |
+| 3rd | [fastapi.tiangolo.com](https://fastapi.tiangolo.com) | If your backend has issues |
+| 4th | [nextjs.org/docs](https://nextjs.org/docs) | If your frontend has issues |
+| 5th | [hindsight.vectorize.io/sdks/integrations/openclaw](https://hindsight.vectorize.io/sdks/integrations/openclaw) | Optional: OpenClaw agent framework |
+
+---
+
+### Stage 5 — Free data sources for realistic demo data
+
+Your demo needs to look real. Use these to generate or find realistic sales data:
+
+| Tool | How to use it |
+|---|---|
+| **Claude (this chat)** | Ask: *"Generate 20 realistic sales call notes for a B2B SaaS deal with a logistics company"* — paste the output into your seed script |
+| **ChatGPT** | Same as above — good for generating synthetic CRM data |
+| **Kaggle** | [kaggle.com/datasets](https://kaggle.com/datasets) — search "sales CRM data" for real datasets |
+| **HuggingFace** | [huggingface.co/datasets](https://huggingface.co/datasets) — search "sales conversations" |
+
+---
+
+### Stage 6 — Demo & submission tools
+
+| Tool | Purpose | Link | Cost |
+|---|---|---|---|
+| **Loom** | Record your demo video (required for submission) | [loom.com](https://loom.com) | Free |
+| **Notion** | Write your submission article | [notion.so](https://notion.so) | Free |
+| **Vercel** | Deploy frontend live (so judges can try it) | [vercel.com](https://vercel.com) | Free |
+| **Railway** | Deploy backend live | [railway.app](https://railway.app) | Free tier |
+| **LinkedIn** | Post your social media submission | [linkedin.com](https://linkedin.com) | Free |
+
+---
+
+## 📅 Step-by-Step Day Plan
+
+```
+DAY 1 — Morning (2 hrs)
+  ✅ Create Hindsight account → apply MEMHACK6
+  ✅ Create Groq account → copy API key
+  ✅ Create GitHub repo
+  ✅ Install Python, Node, VS Code, Git
+  ✅ Join Hindsight Slack
+
+DAY 1 — Afternoon (3 hrs)
+  ✅ Use Jules/Claude to scaffold backend (main.py, agent.py, memory.py)
+  ✅ Get echo server running on localhost:8000
+  ✅ Replace echo with real Groq LLM call
+  ✅ Test at localhost:8000/docs
+
+DAY 2 — Morning (2 hrs)
+  ✅ Wire up memory.py (fetch + save)
+  ✅ Run seed_memory.py to pre-load 20 fake Acme interactions
+  ✅ Confirm memory is working: ask "what objections has Acme raised?"
+
+DAY 2 — Afternoon (3 hrs)
+  ✅ Build Next.js frontend (chat window + Memory Monitor Panel)
+  ✅ Connect frontend to backend
+  ✅ Test full loop: type message → see response → see memory cards light up
+
+DAY 3 — Morning (2 hrs)
+  ✅ Deploy frontend to Vercel
+  ✅ Deploy backend to Railway
+  ✅ Test live URLs
+
+DAY 3 — Afternoon (2 hrs)
+  ✅ Record Loom demo video (60 seconds)
+  ✅ Write submission article in Notion
+  ✅ Draft LinkedIn post
+  ✅ Push clean code to GitHub with README
+  ✅ Submit
+```
+
+---
+
+## 🤖 How to use AI agents most effectively as a beginner
+
+**The loop that works:**
+
+```
+1. Copy the error message from your terminal
+2. Paste it here (Claude) or into Jules
+3. Say: "I got this error. Here is my current code: [paste code]"
+4. Replace your file with the fixed version
+5. Repeat
+```
+
+**Best prompts to use with Jules or Claude:**
+
+| Situation | Prompt to use |
+|---|---|
+| Starting a file | *"Write a complete [filename] file for a FastAPI backend that [does X]. I am a beginner."* |
+| Got an error | *"I got this error: [paste error]. My code is: [paste code]. Fix it."* |
+| Something isn't working | *"My backend returns [X] but I expected [Y]. Here's my code: [paste]. What's wrong?"* |
+| Need to understand something | *"Explain what this line does like I'm 15: [paste line]"* |
+
+---These two are especially useful for your situation — Claude Code lets you point at your actual project folder and say "fix this error" or "add memory to my agent" and it edits your files directly. Much faster than copy-pasting back and forth.
+
+---
+
+**Your very next action:** Open [jules.google.com](https://jules.google.com), connect your GitHub repo, and paste this exact prompt:
+
+> *"Create a Python FastAPI backend for a sales AI agent called PitchMind. Create three files: `main.py` (FastAPI app with a POST /api/chat endpoint), `agent.py` (calls Groq LLM using the groq Python package with model qwen/qwen3-32b), and `memory.py` (stub functions fetch_memories and save_memory that print a log message for now). Load API keys from a .env file using python-dotenv."*
+
+Jules will write all three files. Come back here and paste what it produced — we'll review and fix anything before you run it.
