@@ -1,33 +1,60 @@
-User Persona
-Marcus, a B2B SaaS Account Executive at a 50-person startup. He manages 30+ active deals, has calls daily, and loses 45 minutes before each call re-reading CRM notes, Slack threads, and email chains to remember what the prospect said 3 weeks ago.
-The 3-Interaction Story
-InteractionWhat Marcus asksWithout memory (bad)With memory (PitchMind)#1"Brief me on the Acme Corp deal""I don't have any info on that deal."Stores first mention of Acme: industry, contact name, budget hint#5"They pushed back on pricing again""Here are some generic objection-handling tips.""Acme raised pricing concerns twice before. Last time you offered a quarterly payment plan — they went quiet after that. Try ROI framing instead."#20"I have a call with Acme in 10 mins"Generic agenda templateFull pre-call brief: decision-maker names, every objection ever raised, what worked, competitor (Salesforce) mentioned in week 2, promises made on the last call
+I've read your hackathon brief and the problem statements carefully. Let me build you a comprehensive guide AND a visual architectural reference. Here's the full breakdown:
 
-2. COMPLETE ARCHITECTURAL STRUCTURE
-Frontend: Next.js 14 + Tailwind CSS
+---
 
-Chat Interface — standard message input/output, streaming responses
-Memory Monitor Panel (the secret weapon for judges) — a live sidebar that lights up whenever Hindsight is queried, showing:
+# 🏆 Hackathon Blueprint: Deal Intelligence Agent
 
-Which memories were retrieved
-The relevance score of each memory
-How many past interactions informed this response
+---
 
+## 1. CHOSEN PROJECT IDEA & SCENARIO
 
-Deal Sidebar — shows active deal context (prospect name, stage, last touch)
+**Project: "PitchMind" — The AI Sales Deal Intelligence Agent**
 
-Backend: Python + FastAPI
+### Why This Wins
+- Immediately answerable: "Would someone pay $50/month?" → **Yes. Sales reps pay $100+/month for Gong alone.**
+- Memory is *obviously* the value: without it, you have a chatbot; with it, you have institutional deal knowledge.
+- 60-second demo is trivial: show interaction 1 vs interaction 20, judges immediately get it.
 
-Handles chat POST requests from frontend
-Orchestrates the memory query → LLM call → memory save lifecycle
-Returns streaming SSE (Server-Sent Events) to the frontend for real-time typing effect
+### User Persona
+**Marcus**, a B2B SaaS Account Executive at a 50-person startup. He manages 30+ active deals, has calls daily, and loses 45 minutes before each call re-reading CRM notes, Slack threads, and email chains to remember what the prospect said 3 weeks ago.
 
-Protocols
+### The 3-Interaction Story
+
+| Interaction | What Marcus asks | Without memory (bad) | With memory (PitchMind) |
+|---|---|---|---|
+| **#1** | "Brief me on the Acme Corp deal" | "I don't have any info on that deal." | Stores first mention of Acme: industry, contact name, budget hint |
+| **#5** | "They pushed back on pricing again" | "Here are some generic objection-handling tips." | "Acme raised pricing concerns twice before. Last time you offered a quarterly payment plan — they went quiet after that. Try ROI framing instead." |
+| **#20** | "I have a call with Acme in 10 mins" | Generic agenda template | Full pre-call brief: decision-maker names, every objection ever raised, what worked, competitor (Salesforce) mentioned in week 2, promises made on the last call |
+
+---
+
+## 2. COMPLETE ARCHITECTURAL STRUCTURE
+
+### Frontend: Next.js 14 + Tailwind CSS
+- **Chat Interface** — standard message input/output, streaming responses
+- **Memory Monitor Panel** (the secret weapon for judges) — a live sidebar that lights up whenever Hindsight is queried, showing:
+  - Which memories were retrieved
+  - The relevance score of each memory
+  - How many past interactions informed this response
+- **Deal Sidebar** — shows active deal context (prospect name, stage, last touch)
+
+### Backend: Python + FastAPI
+- Handles chat POST requests from frontend
+- Orchestrates the memory query → LLM call → memory save lifecycle
+- Returns streaming SSE (Server-Sent Events) to the frontend for real-time typing effect
+
+### Protocols
+```
 Browser ←──SSE streaming──→ FastAPI Backend ←──REST──→ Groq LLM
                                     ↕
                               Hindsight Cloud (REST)
+```
 
-3. AGENT & MEMORY LIFECYCLE PIPELINE
+---
+
+## 3. AGENT & MEMORY LIFECYCLE PIPELINE
+
+```
 User types message
        ↓
 POST /api/chat  (FastAPI)
@@ -49,10 +76,16 @@ POST /api/chat  (FastAPI)
      metadata: { type: "objection", date: today } }
        ↓
 Stream SSE chunks → Frontend renders response + Memory Panel updates
+```
 
-4. THE "I KNOW NOTHING" BEGINNER BLUEPRINT
-Step 1: Terminal Setup
-bash# Create project
+---
+
+## 4. THE "I KNOW NOTHING" BEGINNER BLUEPRINT
+
+### Step 1: Terminal Setup
+
+```bash
+# Create project
 mkdir pitchmind && cd pitchmind
 
 # Backend setup (Python)
@@ -65,7 +98,11 @@ pip install fastapi uvicorn groq httpx python-dotenv sse-starlette
 # Frontend setup
 npx create-next-app@latest frontend --typescript --tailwind --app
 cd frontend && npm install
-Step 2: Project Structure
+```
+
+### Step 2: Project Structure
+
+```
 pitchmind/
 ├── backend/
 │   ├── main.py              # FastAPI app entry point
@@ -83,13 +120,20 @@ pitchmind/
 │   │   └── DealSidebar.tsx  # Active deal context
 │   └── .env.local           # NEXT_PUBLIC_API_URL=http://localhost:8000
 └── README.md
-Step 3: Starter Code
-backend/.env
+```
+
+### Step 3: Starter Code
+
+**`backend/.env`**
+```
 GROQ_API_KEY=your_groq_key_here
 HINDSIGHT_API_KEY=your_hindsight_key_here
 HINDSIGHT_BASE_URL=https://ui.hindsight.vectorize.io
-backend/memory.py — Hindsight wrapper
-pythonimport httpx
+```
+
+**`backend/memory.py`** — Hindsight wrapper
+```python
+import httpx
 import os
 
 HINDSIGHT_BASE = os.getenv("HINDSIGHT_BASE_URL")
@@ -135,8 +179,11 @@ async def save_memory(user_id: str, deal_name: str, content: str, metadata: dict
             )
         except Exception as e:
             print(f"[Memory save error] {e}")
-backend/agent.py — Core agent with Groq + memory injection
-pythonfrom groq import Groq
+```
+
+**`backend/agent.py`** — Core agent with Groq + memory injection
+```python
+from groq import Groq
 from memory import fetch_memories, save_memory
 import os
 
@@ -183,8 +230,11 @@ async def run_agent(user_id: str, deal_name: str, user_message: str):
     )
     
     return answer, memories  # Return memories too so frontend can show them
-backend/main.py — FastAPI entry point
-pythonfrom fastapi import FastAPI
+```
+
+**`backend/main.py`** — FastAPI entry point
+```python
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from agent import run_agent
@@ -209,8 +259,11 @@ async def chat(req: ChatRequest):
     }
 
 # Run: uvicorn main:app --reload
-frontend/components/MemoryPanel.tsx — The judge-impressing panel
-tsx// Shows live which memories Hindsight retrieved for the current response
+```
+
+**`frontend/components/MemoryPanel.tsx`** — The judge-impressing panel
+```tsx
+// Shows live which memories Hindsight retrieved for the current response
 export function MemoryPanel({ memories }: { memories: any[] }) {
   return (
     <div className="border-l border-zinc-700 p-4 w-72 bg-zinc-900 text-sm">
@@ -235,25 +288,36 @@ export function MemoryPanel({ memories }: { memories: any[] }) {
     </div>
   )
 }
+```
 
-5. FREE RESOURCE & TOOLING CHECKLIST
-ResourceLinkActionHindsight Cloudhttps://ui.hindsight.vectorize.ioRegister → Billing → Enter MEMHACK6 for $50 creditHindsight Docshttps://hindsight.vectorize.ioRead the /api/memory/search and /store endpointsHindsight GitHubhttps://github.com/vectorize-io/hindsightStar it (looks good), check examplesHindsight SlackJoin via docs pageAsk questions — organizers monitor this during hackathonGroq Consolehttps://console.groq.comSign up → API Keys → copy keyOpenClaw Pluginhttps://hindsight.vectorize.io/sdks/integrations/openclawOptional: use if you want agent framework abstractionsSynthetic DataChatGPT or ClaudeGenerate 20 fake deal interactions to pre-seed memory for demo
+---
 
-Demo Script (60 seconds)
+## 5. FREE RESOURCE & TOOLING CHECKLIST
 
-"Meet Marcus, a sales rep with 30 active deals. Before PitchMind — [show blank generic response]. After 20 interactions — [show response citing Acme's pricing objections from 3 weeks ago, the competitor they mentioned, the promises made]. Watch the Memory Panel on the right — those green cards are Hindsight retrieving exact past context in real time. The agent doesn't just remember — it gets strategically smarter with every call."
+| Resource | Link | Action |
+|---|---|---|
+| **Hindsight Cloud** | https://ui.hindsight.vectorize.io | Register → Billing → Enter `MEMHACK6` for $50 credit |
+| **Hindsight Docs** | https://hindsight.vectorize.io | Read the `/api/memory/search` and `/store` endpoints |
+| **Hindsight GitHub** | https://github.com/vectorize-io/hindsight | Star it (looks good), check examples |
+| **Hindsight Slack** | Join via docs page | Ask questions — organizers monitor this during hackathon |
+| **Groq Console** | https://console.groq.com | Sign up → API Keys → copy key |
+| **OpenClaw Plugin** | https://hindsight.vectorize.io/sdks/integrations/openclaw | Optional: use if you want agent framework abstractions |
+| **Synthetic Data** | ChatGPT or Claude | Generate 20 fake deal interactions to pre-seed memory for demo |
 
-Now let me build you a visual architecture diagram you can use for the submission:
-  ::view-transition-group(*),
-  ::view-transition-old(*),
-  ::view-transition-new(*) {
-    animation-duration: 0.25s;
-    animation-timing-function: cubic-bezier(0.19, 1, 0.22, 1);
-  }
-VvisualizeVvisualize show_widgetThe architecture diagram above is clickable — tap any box to dive deeper into that component.
+---
 
-Quick-start command sequence (copy-paste ready)
-bash# 1. Clone / init
+## Demo Script (60 seconds)
+
+> *"Meet Marcus, a sales rep with 30 active deals. Before PitchMind — [show blank generic response]. After 20 interactions — [show response citing Acme's pricing objections from 3 weeks ago, the competitor they mentioned, the promises made]. Watch the Memory Panel on the right — those green cards are Hindsight retrieving exact past context in real time. The agent doesn't just remember — it gets strategically smarter with every call."*
+
+Now let me build you a visual architecture diagram you can use for the submission:The architecture diagram above is clickable — tap any box to dive deeper into that component.
+
+---
+
+## Quick-start command sequence (copy-paste ready)
+
+```bash
+# 1. Clone / init
 mkdir pitchmind && cd pitchmind
 git init
 
@@ -270,6 +334,10 @@ cd backend && uvicorn main:app --reload --port 8000
 
 # 5. Run frontend (new terminal)
 cd frontend && npm run dev
+```
 
-The single most important thing for your score
-Pre-seed your Hindsight instance before the demo. Run a script the night before that fires 15–20 synthetic interactions into Hindsight for a fake deal ("Acme Corp / Q3 Enterprise Contract"). When you demo live, interaction #1 will already "know" Acme's objections, competitors, and stakeholder names — making the memory benefit immediately visible to judges in under 10 seconds. This is the difference between a 20% and a 25% on the Hindsight memory criterion.
+---
+
+## The single most important thing for your score
+
+**Pre-seed your Hindsight instance before the demo.** Run a script the night before that fires 15–20 synthetic interactions into Hindsight for a fake deal ("Acme Corp / Q3 Enterprise Contract"). When you demo live, interaction #1 will already "know" Acme's objections, competitors, and stakeholder names — making the memory benefit immediately visible to judges in under 10 seconds. This is the difference between a 20% and a 25% on the Hindsight memory criterion.
