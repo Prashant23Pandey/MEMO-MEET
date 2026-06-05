@@ -1,14 +1,4 @@
-I've read your hackathon brief and the problem statements carefully. Let me build you a comprehensive guide AND a visual architectural reference. Here's the full breakdown:
-
----
-
-# 🏆 Hackathon Blueprint: Deal Intelligence Agent
-
----
-
-## 1. CHOSEN PROJECT IDEA & SCENARIO
-
-**Project: "PitchMind" — The AI Sales Deal Intelligence Agent**
+**Deal Intelligence Agent Project: "PitchMind" — The AI Sales Deal Intelligence Agent**
 
 ### Why This Wins
 - Immediately answerable: "Would someone pay $50/month?" → **Yes. Sales reps pay $100+/month for Gong alone.**
