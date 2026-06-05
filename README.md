@@ -70,7 +70,7 @@ Stream SSE chunks → Frontend renders response + Memory Panel updates
 
 ---
 
-## 4. THE "I KNOW NOTHING" BEGINNER BLUEPRINT
+## 4. BLUEPRINT
 
 ### Step 1: Terminal Setup
 
