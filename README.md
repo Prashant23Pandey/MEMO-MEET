@@ -1,4 +1,4 @@
-**Deal Intelligence Agent Project: "PitchMind" — The AI Sales Deal Intelligence Agent**
+# Deal Intelligence Agent Project: "PitchMind"—The AI Sales Deal Intelligence Agent
 
 ### Why This Wins
 - Immediately answerable: "Would someone pay $50/month?" → **Yes. Sales reps pay $100+/month for Gong alone.**
